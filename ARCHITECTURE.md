@@ -68,22 +68,56 @@ tree, the simulator) and reused, rather than re-derived per stage.
 
 > The language model narrates. It never decides anything that moves money.
 
+```mermaid
+flowchart TD
+    SYN["Synthetic generator<br/>every anomaly's cause is labelled"]
+    SYN --> OBS["observed()<br/>truth columns removed"]
+    SYN --> TEL["Side channels<br/>tracking health · first-party orders · change log"]
+
+    subgraph GRAPH["LangGraph pipeline · agent/graph.py"]
+        DET["detect<br/>significance + effect floor"]
+        DEC["decompose<br/>log-additive KPI tree"]
+        RC["root_cause<br/>rank drivers · flag measurement risk"]
+        VER["verify"]
+        INV["investigate<br/>agent over read-only tools"]
+        DIA["diagnosed"]
+        ACT["act<br/>playbook lookup"]
+        POL["policy<br/>guardrails"]
+        NAR["narrate<br/>explanation only"]
+        DET -->|"anomaly"| DEC --> RC
+        RC -->|"measurement suspect"| VER --> INV --> ACT
+        RC -->|"other cause"| DIA --> ACT
+        ACT --> POL --> NAR
+    end
+
+    OBS --> DET
+    DET -->|"no anomaly"| CLEAN(["no action"])
+    TEL -.->|"evidence"| INV
+    NAR --> EXE["execution<br/>approve · sandbox · rollback"]
+
+    classDef data fill:#ffffff,stroke:#8c959f,color:#1f2328
+    classDef det fill:#f6f8fa,stroke:#57606a,color:#1f2328
+    classDef llm fill:#ddf4ff,stroke:#0969da,color:#1f2328
+    classDef newdata fill:#ffffff,stroke:#bf8700,stroke-width:3px,color:#1f2328
+    classDef newllm fill:#ddf4ff,stroke:#bf8700,stroke-width:3px,color:#1f2328
+    class SYN,OBS data
+    class DET,DEC,RC,VER,DIA,ACT,POL,EXE,CLEAN det
+    class NAR llm
+    class TEL newdata
+    class INV newllm
 ```
-                     ┌───────────────── deterministic, testable, offline ─────────────────┐
-   observed data ──▶ detect ──▶ decompose ──▶ root_cause ──▶ act ──▶ policy ──▶ execution
-                       │           │             │            │        │           │
-                    z / t-test   log-additive  rank +      playbook  guardrails  approve /
-                    + effect     identity      measurement  lookup    (rules)    sandbox /
-                    floor        tree          suspect flag                      rollback
-                                                   │
-                                                   └───▶ narrate (LLM) ── explanation only, grounded on the evidence above
-```
+
+<sub>**Grey:** deterministic code. **Blue:** a model runs here. **Gold border:** added with the investigator ([§10](#10-build-plan-investigator-agent--harness)). **Dashed arrow:** read-only evidence.</sub>
 
 The LLM (`agent/diagnosis.py`, `claude-opus-5-5`, structured output via
 `messages.parse`) is handed *only* the deterministic evidence — never truth columns —
 and writes the human-readable explanation. It cannot invent a root cause the
 deterministic stages did not find, and it cannot choose the action. This is where the
 project puts the model and, more importantly, where it does **not**.
+
+The investigator (§10) adds one more, narrower model role: on the measurement-suspect
+branch only, an agent decides *what is true* from read-only evidence. It still cannot
+choose an action; its verdict only selects a playbook row.
 
 ## 5. The stages
 
@@ -92,6 +126,7 @@ project puts the model and, more importantly, where it does **not**.
 | Detect | `agent/detect.py` | two-proportion z (rates), Welch t (counts/ratios) | significance **and** a ≥10% effect floor — pure significance over-fires on huge campaigns |
 | Decompose | `agent/decompose.py` | Δlog(KPI)=Σ ±Δlog(driver) down the identity tree | count KPIs use **per-day** levels, so a 2-wk window vs 4-wk baseline is period-length invariant |
 | Root cause | `agent/root_cause.py` | significant driver with the largest log-move; confounds ranked | raises `measurement_suspect` on any cvr-down signature |
+| Investigate | `agent/investigator/` | agent loop over read-only tools and side channels | runs only on the measurement-suspect branch; any failed check falls back to `verify_measurement` |
 | Narrate | `agent/diagnosis.py` | LLM explanation | injected into the graph; the graph never imports the SDK |
 | Act | `agent/actions.py` | driver → analyst playbook | a measurement-suspect signature is **never** a bid/budget cut |
 | Policy | `agent/policy.py` | approve / require_approval / block | most-restrictive-wins over independent guardrails |
@@ -199,11 +234,14 @@ That ambiguity is exactly the job an agent is good at: open-ended, multi-step ev
 gathering where no single source is decisive. No money moves while it investigates. So the
 agent goes **there** and nowhere else:
 
-```
-root_cause ─▶ (measurement_suspect?) ─ yes ─▶ verify ─▶ INVESTIGATE ─▶ act ─▶ policy
-                                                          │
-                     agent loop over read-only tools ─────┘
-                     verdict: tracking_outage | real_cvr_drop | inconclusive
+```mermaid
+flowchart LR
+    RC["root_cause"] -->|"measurement suspect"| VER["verify"] --> INV["investigate<br/>agent · read-only tools"] --> ACT["act"] --> POL["policy"]
+    INV -.- OUT["verdict<br/>tracking_outage · real_cvr_drop · inconclusive"]
+    classDef det fill:#f6f8fa,stroke:#57606a,color:#1f2328
+    classDef newllm fill:#ddf4ff,stroke:#bf8700,stroke-width:3px,color:#1f2328
+    class RC,VER,ACT,POL,OUT det
+    class INV newllm
 ```
 
 The principle is unchanged, only refined. **The agent may now decide what is true;
@@ -257,6 +295,49 @@ The harness **validates the verdict** before anything downstream sees it:
 A `HeuristicPolicy` drives the same tools through the same harness with fixed rules. It
 gives an offline baseline the LLM agent has to beat, and it runs the whole stack in CI
 without an API key.
+
+**One investigation, end to end.**
+
+```mermaid
+flowchart TD
+    CASE(["measurement-suspect case"]) --> M
+
+    subgraph LOOP["Harness loop · agent/harness"]
+        M["model<br/>Claude · heuristic · scripted"]
+        V{"allowlisted and<br/>schema-valid?"}
+        PH{"pre-hooks<br/>1 read tier only<br/>2 policy gate<br/>3 evidence guard"}
+        T["read tool<br/>metrics · peers · change log<br/>tracking health · first-party orders"]
+        LG["post-hook<br/>evidence ledger"]
+        ER["error result"]
+        RS["result, tagged with its tool_use_id"]
+        M -->|"tool call"| V
+        V -->|"yes"| PH
+        V -->|"no"| ER
+        PH -->|"deny"| ER
+        PH -->|"allow"| T --> LG --> RS
+        ER --> RS
+        RS --> M
+    end
+
+    PH -->|"allow submit_verdict"| AC{"accept?<br/>cited calls ran · side channel cited<br/>confidence ≥ 0.70"}
+    M -.->|"budget spent: steps · tokens · time"| FB
+    AC -->|"tracking_outage"| A1["no_action_fix_measurement"]
+    AC -->|"real_cvr_drop"| A2["investigate_landing_page_and_checkout"]
+    AC -->|"rejected or inconclusive"| FB["verify_measurement<br/>a human checks"]
+
+    classDef llm fill:#ddf4ff,stroke:#0969da,color:#1f2328
+    classDef guard fill:#fff8c5,stroke:#bf8700,color:#1f2328
+    classDef det fill:#f6f8fa,stroke:#57606a,color:#1f2328
+    classDef ok fill:#dafbe1,stroke:#1a7f37,color:#1f2328
+    classDef safe fill:#f6f8fa,stroke:#57606a,stroke-dasharray:4 3,color:#1f2328
+    class M llm
+    class V,PH,AC guard
+    class T,LG,ER,RS,CASE det
+    class A1,A2 ok
+    class FB safe
+```
+
+<sub>**Yellow:** checks the model cannot talk its way past. **Green:** an accepted verdict selects a playbook row. **Dashed:** the fallback, which is the pre-agent behaviour. Every model mistake comes back as an error result it can recover from, and every resource it can burn ends in a stop reason.</sub>
 
 ### Checklist
 

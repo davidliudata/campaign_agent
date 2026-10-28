@@ -8,6 +8,52 @@ ground truth.
 Week 1 builds the foundation everything else is scored against: a synthetic
 data generator whose anomalies are **labelled with their causes**.
 
+## Architecture at a glance
+
+```mermaid
+flowchart TD
+    SYN["Synthetic generator<br/>every anomaly's cause is labelled"]
+    SYN --> OBS["observed()<br/>truth columns removed"]
+    SYN --> TEL["Side channels<br/>tracking health · first-party orders · change log"]
+
+    subgraph GRAPH["LangGraph pipeline · agent/graph.py"]
+        DET["detect<br/>significance + effect floor"]
+        DEC["decompose<br/>log-additive KPI tree"]
+        RC["root_cause<br/>rank drivers · flag measurement risk"]
+        VER["verify"]
+        INV["investigate<br/>agent over read-only tools"]
+        DIA["diagnosed"]
+        ACT["act<br/>playbook lookup"]
+        POL["policy<br/>guardrails"]
+        NAR["narrate<br/>explanation only"]
+        DET -->|"anomaly"| DEC --> RC
+        RC -->|"measurement suspect"| VER --> INV --> ACT
+        RC -->|"other cause"| DIA --> ACT
+        ACT --> POL --> NAR
+    end
+
+    OBS --> DET
+    DET -->|"no anomaly"| CLEAN(["no action"])
+    TEL -.->|"evidence"| INV
+    NAR --> EXE["execution<br/>approve · sandbox · rollback"]
+
+    classDef data fill:#ffffff,stroke:#8c959f,color:#1f2328
+    classDef det fill:#f6f8fa,stroke:#57606a,color:#1f2328
+    classDef llm fill:#ddf4ff,stroke:#0969da,color:#1f2328
+    classDef newdata fill:#ffffff,stroke:#bf8700,stroke-width:3px,color:#1f2328
+    classDef newllm fill:#ddf4ff,stroke:#bf8700,stroke-width:3px,color:#1f2328
+    class SYN,OBS data
+    class DET,DEC,RC,VER,DIA,ACT,POL,EXE,CLEAN det
+    class NAR llm
+    class TEL newdata
+    class INV newllm
+```
+
+<sub>**Grey:** deterministic code. **Blue:** a model runs here. **Gold border:** added with the investigator ([§10](ARCHITECTURE.md#10-build-plan-investigator-agent--harness)). **Dashed arrow:** read-only evidence.</sub>
+
+The design rationale, the safety argument and the eval results are in
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Billing model: CPC
 
 The advertiser pays per click. That is not a detail — it determines which
