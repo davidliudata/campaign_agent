@@ -31,6 +31,7 @@ import numpy as np
 from .events import Event, write_manifest
 from .schema import CampaignSpec, FACT_COLUMNS
 from .synth import default_portfolio, generate
+from .telemetry import generate_telemetry
 
 
 # --------------------------------------------------------------------------
@@ -172,6 +173,7 @@ def build_suite(
         df.to_csv(ds / "campaigns_full.csv", index=False)
         df[FACT_COLUMNS].to_csv(ds / "campaigns.csv", index=False)
         write_manifest(events, ds / "manifest.json")
+        generate_telemetry(df, events, portfolio, seed=seed0 + i).save(ds)
         written.append(ds)
     return written
 

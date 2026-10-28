@@ -16,8 +16,10 @@ and the one rule that earns the whole project: when the anomaly is
 `measurement_suspect` — the CVR-collapse signature that a tracking outage and a
 real checkout regression share — the action is NEVER a bid or budget cut. It is
 `verify_measurement`, the safe common prefix of both correct responses (fix the
-pipeline if it broke; investigate checkout if it did not). That is why the
-headline eval metric is harmful-action-rate on artifacts, and why this function
+pipeline if it broke; investigate checkout if it did not). When the investigator
+agent has RESOLVED the case (a verdict that survived validation), that prefix is
+replaced by the matching playbook row: still a lookup, still never a cut. That is
+why the headline eval metric is harmful-action-rate on artifacts, and why this function
 makes it structurally zero: no path here emits a harmful action on that signature.
 """
 
@@ -51,10 +53,26 @@ class Action:
     rationale: str
 
 
-def recommend(root: Optional[RootCause]) -> Action:
-    """Map a root cause to a recommended action. Advisory; a human/policy gate acts."""
+#: an accepted investigator verdict -> the playbook row it unlocks
+ACTION_BY_VERDICT = {
+    "tracking_outage": "no_action_fix_measurement",
+    "real_cvr_drop": "investigate_landing_page_and_checkout",
+}
+
+
+def recommend(root: Optional[RootCause], investigation=None) -> Action:
+    """Map a root cause to a recommended action. Advisory; a human/policy gate acts.
+
+    `investigation` (optional) is the investigator's result for a suspect case; only
+    a resolved verdict changes anything, and only to another non-money action."""
     if root is None or root.primary_driver is None:
         return Action("no_action", False, False, "no anomaly to act on")
+
+    if root.measurement_suspect and investigation is not None and investigation.resolved:
+        v = investigation.verdict
+        return Action(ACTION_BY_VERDICT[v.hypothesis], requires_verification=False,
+                      harmful_if_artifact=False,
+                      rationale=f"investigator verdict {v.hypothesis} ({v.confidence:.2f}): {v.summary}")
 
     if root.measurement_suspect:
         return Action(
@@ -72,4 +90,4 @@ def recommend(root: Optional[RootCause]) -> Action:
 
 
 def act_node(state: dict) -> dict:
-    return {"action": recommend(state.get("root"))}
+    return {"action": recommend(state.get("root"), state.get("investigation"))}

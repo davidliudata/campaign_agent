@@ -60,6 +60,10 @@ is answered by four design choices:
 data/schema.py           metric identities, CampaignSpec, observed/truth split
 data/events.py           the KINDS registry (= the answer key), Event, manifest i/o
 data/synth.py            the generator, the default portfolio, the demo scenarios
+data/telemetry.py        side channels: tracking health, first-party orders, change log
+agent/                   detect → decompose → root_cause → act → policy → execution (+ graph.py)
+agent/harness/           domain-free agent runtime: tools + tiers, loop + budgets, hooks, trace
+agent/investigator/      the investigator agent: read-only tools, evidence guard, policy hook
 tools/inspect_events.py  what each labelled event did to the data
 tests/                   the specification
 notes/                   interview talking points, three lines per week
@@ -68,7 +72,7 @@ notes/                   interview talking points, three lines per week
 ## Run
 
 ```bash
-python -m pytest tests/ -q                      # 22 tests
+python -m pytest tests/ -q                      # 172 passed + 3 skipped (LLM tests need a key)
 python -m data.synth --days 120 --out ./generated
 python -m tools.inspect_events                  # before/after per labelled event
 ```
@@ -146,6 +150,7 @@ where a confident agent does real damage.
 | 10 | Approval / sandbox / rollback — **done** (`agent/execution.py`) |
 | 11 | Evaluation harness over the cross-validation suite — **done** (`tools/evaluate.py`) |
 | 12 | Productionize + demo — **done** (`demo.py`, [`ARCHITECTURE.md`](ARCHITECTURE.md)) |
+| 13 | Investigator agent + harness on the verify branch — **done** (`agent/harness/`, `agent/investigator/`, [ARCHITECTURE §10](ARCHITECTURE.md#10-build-plan-investigator-agent--harness)) |
 
 ## The whole thing, end to end
 
@@ -153,6 +158,10 @@ where a confident agent does real damage.
 python demo.py                     # the trap walked through every stage (offline)
 python -m tools.evaluate --n 20    # the full graded harness
 python webui.py                    # a browser UI to ask questions (see below)
+
+python -m tools.ask --event e004 --investigator heuristic        # agent on the verify branch
+python -m tools.evaluate --n 20 --investigator heuristic         # rule baseline, offline
+python -m tools.evaluate --n 20 --investigator llm --trace-dir traces/   # Claude, needs a key
 ```
 
 [`ARCHITECTURE.md`](ARCHITECTURE.md) is the design rationale: the deterministic-core /
@@ -161,3 +170,15 @@ methodology. Headline results over 20 cross-validation scenarios: **100% detecti
 100% root-cause & action accuracy, 3.3% false-positive rate, and — the metric that
 matters — 0% harmful actions on measurement artifacts with a proposed cut blocked and
 refused 100% of the time.**
+
+### Investigator agent
+
+The pipeline above stops at "verify measurement" on a CVR collapse, because the
+reported numbers cannot separate a tracking outage from a real checkout break. The
+investigator is an agent loop that resolves it with read-only tools over side
+channels (tracking health, first-party orders, change log, peers). It runs on a
+small harness built for this: allowlisted tools with permission tiers, step / token /
+time budgets, `policy.py` as a PreToolUse hook, an evidence guard that rejects
+verdicts citing calls that never ran, and a JSONL trace per run. A verdict only
+selects between two non-money playbook rows; anything unvalidated falls back to
+verify. The safety rows above are unchanged with the agent wired in.

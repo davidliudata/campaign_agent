@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 from .graph import DiagnosisState, build_graph
 
-MODEL = "claude-opus-4-8"
+MODEL = "claude-opus-5-5"
 
 SYSTEM = """\
 You are an ads analyst writing the human-facing diagnosis of a campaign

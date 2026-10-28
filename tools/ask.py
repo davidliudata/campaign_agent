@@ -9,6 +9,8 @@ pipeline — the model only narrates.
     python -m tools.ask                                   # interactive
     python -m tools.ask --event e004                      # the tracking-outage trap
     python -m tools.ask --campaign c_beauty_us --start 2026-05-25 --end 2026-05-29
+    python -m tools.ask --event e004 --investigator heuristic   # agent on the verify branch
+    python -m tools.ask --event e004 --investigator llm         # same, driven by Claude (needs a key)
 """
 
 from __future__ import annotations
@@ -26,8 +28,29 @@ from data.schema import observed
 BASELINE = (date(2026, 3, 2), date(2026, 3, 29))   # clean pre-period in the demo data
 
 
+INVESTIGATOR = {"node": None}      # set by --investigator
+
+
+def _investigator(kind: str, directory: str):
+    """Build the verify-branch node. Telemetry is read from the dataset directory, or
+    simulated from its truth file + manifest if an older dataset predates it."""
+    from data.telemetry import Telemetry, generate_telemetry
+    from data.synth import default_portfolio
+    from agent.investigator import heuristic_client, llm_client, make_investigate_node
+    root = Path(directory)
+    if Telemetry.exists(root):
+        tel = Telemetry.load(root)
+    else:
+        full = pd.read_csv(root / "campaigns_full.csv", parse_dates=["date"])
+        tel = generate_telemetry(full, read_manifest(root / "manifest.json"), default_portfolio())
+    return make_investigate_node(tel, heuristic_client if kind == "heuristic" else llm_client)
+
+
 def _diagnose(obs, campaign_id, window):
     """Use the LLM narrative graph if a key is present, else the deterministic one."""
+    if INVESTIGATOR["node"] is not None:
+        from agent.graph import diagnose
+        return diagnose(obs, campaign_id, window, BASELINE, investigate_node=INVESTIGATOR["node"])
     if os.getenv("ANTHROPIC_API_KEY"):
         from agent.diagnosis import diagnose_with_narrative
         return diagnose_with_narrative(obs, campaign_id, window, BASELINE)
@@ -54,6 +77,17 @@ def report(state) -> None:
     if dx is not None:                       # LLM narrative present
         print(f"\n  “{dx.headline}”")
         print(f"  {dx.explanation}")
+
+    inv = state.get("investigation")
+    if inv is not None:
+        v = inv.verdict
+        print(f"\n  Investigator ({inv.trace.turns} turns, {len(inv.trace.tool_calls())} tool calls, "
+              f"stop={inv.stop}): {v.hypothesis.upper()} conf {v.confidence:.2f}")
+        print(f"    {v.summary}")
+        if inv.fallback_reason:
+            print(f"    (fell back to verify: {inv.fallback_reason})")
+        for e in inv.trace.tool_calls():
+            print(f"    · {e.name}{' [error]' if e.is_error else ''}")
 
     act = state.get("action")
     if act is not None:
@@ -101,7 +135,11 @@ def main(argv=None) -> int:
     ap.add_argument("--campaign")
     ap.add_argument("--start")
     ap.add_argument("--end")
+    ap.add_argument("--investigator", choices=["none", "heuristic", "llm"], default="none",
+                    help="run the investigator agent on measurement-suspect cases")
     args = ap.parse_args(argv)
+    if args.investigator != "none":
+        INVESTIGATOR["node"] = _investigator(args.investigator, args.dir)
 
     obs, events = load(args.dir)
     if args.event:

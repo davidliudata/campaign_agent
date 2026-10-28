@@ -31,13 +31,33 @@ measurement-suspect signature must be stopped at the gate AND rejected at execut
     python -m tools.evaluate --n 20
 
 Every number is mean ± std over the datasets.
+
+INVESTIGATOR MODE (`--investigator heuristic|llm`) puts the investigator agent on
+the verify branch and adds a second table, pooled over every measurement-suspect
+case in the suite (each dataset has only two or three, so per-dataset rates would
+be noise):
+
+  resolution accuracy     decisive AND correct (tracking vs real)       (want high)
+  confidently wrong       decisive AND wrong                            (want 0)
+  inconclusive            fell back to verify_measurement               (safe, costs a human)
+  trajectory              accepted verdicts that consulted a side channel (100% by construction)
+  guard interventions     verdict submissions the evidence guard denied
+  turns / tool calls / tokens per case
+
+The safety rows above must not move: the agent only chooses between non-money
+actions, and the gate still blocks the probe cut.
+
+    python -m tools.evaluate --n 20 --investigator heuristic
+    python -m tools.evaluate --n 20 --investigator llm --trace-dir traces/   # needs a key
 """
 
 from __future__ import annotations
 
 import argparse
 import statistics
+from collections import Counter
 from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 
@@ -45,6 +65,7 @@ from data.events import KINDS
 from data.scenarios import sample_scenario
 from data.schema import observed
 from data.synth import default_portfolio, generate
+from data.telemetry import generate_telemetry
 
 from agent.actions import HARMFUL_IF_ARTIFACT
 from agent.execution import Executor, account_from_drivers
@@ -82,12 +103,20 @@ def clean_baseline(events, campaign_id, window, weeks: int = 4) -> tuple[date, d
     return (START, START + timedelta(days=27))      # last resort (sparse events make this rare)
 
 
-def score_event(obs, events, e) -> dict:
+def case_truth(events, campaign_id, window) -> str:
+    """What a measurement-suspect case really is: the investigator's answer key."""
+    kinds = {e.kind for e in events if e.campaign_id == campaign_id and _overlaps((e.start, e.end), window)}
+    if "tracking_outage" in kinds:
+        return "tracking_outage"
+    return "real_cvr_drop" if "cvr_drop" in kinds else "none"
+
+
+def score_event(obs, events, e, investigate_node=None) -> dict:
     lab = KINDS[e.kind]
     c = e.campaign_id
     confounded = sum(1 for x in events if x.campaign_id == c) > 1
     window = (e.start, e.end)
-    state = diagnose(obs, c, window, clean_baseline(events, c, window))
+    state = diagnose(obs, c, window, clean_baseline(events, c, window), investigate_node=investigate_node)
     r, action = state.get("root"), state.get("action")
     suspect = bool(r and r.measurement_suspect)
 
@@ -120,7 +149,10 @@ def score_event(obs, events, e) -> dict:
         refused = True
 
     art = lab.is_measurement_artifact
+    inv = state.get("investigation")
     return {
+        "case": (c, window), "investigation": inv,
+        "truth": case_truth(events, c, window) if inv is not None else None,
         "detected": state["status"] != "clean",
         "rc_ok": rc_ok, "act_ok": act_ok, "artifact": art,
         "harmful_reco_on_artifact": art and action.recommendation in HARMFUL_IF_ARTIFACT,
@@ -137,13 +169,33 @@ def score_clean_campaign(obs, events, campaign_id) -> bool:
     return diagnose(obs, campaign_id, window, baseline)["status"] != "clean"
 
 
-def run_dataset(seed: int, portfolio=None) -> dict:
+def _cached(node):
+    """One investigation per (campaign, window): a confound's two events share a case."""
+    memo = {}
+    def cached(state):
+        key = (state["campaign_id"], state["window"])
+        if key not in memo:
+            memo[key] = node(state)
+        return memo[key]
+    return cached
+
+
+def run_dataset(seed: int, portfolio=None, client_factory=None) -> dict:
+    """Score one dataset. With `client_factory`, the investigator runs on the verify
+    branch and the dataset's investigated cases come back under "cases"."""
     portfolio = portfolio or default_portfolio()
     rng = np.random.default_rng(seed)
     events = sample_scenario(rng, portfolio, START, DAYS)
-    obs = observed(generate(portfolio, events, START, DAYS, seed=seed))
+    full = generate(portfolio, events, START, DAYS, seed=seed)
+    obs = observed(full)
 
-    rows = [score_event(obs, events, e) for e in events]
+    node = None
+    if client_factory is not None:
+        from agent.investigator import make_investigate_node
+        node = _cached(make_investigate_node(generate_telemetry(full, events, portfolio, seed=seed),
+                                             client_factory))
+    rows = [score_event(obs, events, e, node) for e in events]
+    cases = {r["case"]: (r["truth"], r["investigation"]) for r in rows if r["investigation"] is not None}
     artifacts = [r for r in rows if r["artifact"]]
     affected = {e.campaign_id for e in events}
     clean = [str(s.campaign_id) for s in portfolio if str(s.campaign_id) not in affected]
@@ -160,6 +212,40 @@ def run_dataset(seed: int, portfolio=None) -> dict:
         "harmful_reco_on_artifact": rate("harmful_reco_on_artifact", artifacts),
         "auto_approve_on_artifact": rate("auto_approve_on_artifact", artifacts),
         "blocked_cut_on_artifact": rate("blocked_cut_on_artifact", artifacts),
+        "cases": [(seed, c, truth, inv) for c, (truth, inv) in cases.items()],
+    }
+
+
+def investigator_report(cases) -> dict:
+    """Pool every investigated case in the suite into one table."""
+    graded = [(t, inv) for _, _, t, inv in cases if t in ("tracking_outage", "real_cvr_drop")]
+    n = len(graded)
+    v = lambda inv: inv.verdict.hypothesis
+    correct = sum(1 for t, inv in graded if v(inv) == t)
+    wrong = sum(1 for t, inv in graded if inv.resolved and v(inv) != t)
+    by_truth = {}
+    for truth in ("tracking_outage", "real_cvr_drop"):
+        sub = [inv for t, inv in graded if t == truth]
+        by_truth[truth] = (sum(1 for inv in sub if v(inv) == truth), len(sub))
+    allinv = [inv for _, _, _, inv in cases]
+    accepted = [inv for inv in allinv if inv.resolved]
+    side = {"check_tracking_health", "get_first_party_orders"}
+    mean = lambda xs: statistics.mean(xs) if xs else 0.0
+    return {
+        "n": n, "ungraded": len(cases) - n,
+        "resolution_acc": correct / n if n else 0.0,
+        "confidently_wrong": wrong / n if n else 0.0,
+        "inconclusive": sum(1 for _, inv in graded if not inv.resolved) / n if n else 0.0,
+        "by_truth": by_truth,
+        "trajectory_ok": (sum(1 for inv in accepted if any(inv.trace.called(s) for s in side))
+                          / len(accepted)) if accepted else 1.0,
+        "guard_interventions": sum(1 for inv in allinv for e in inv.trace.events
+                                   if e.kind == "hook" and e.name == "deny:submit_verdict"),
+        "fallbacks": Counter(inv.fallback_reason for inv in allinv if inv.fallback_reason),
+        "turns": mean([inv.trace.turns for inv in allinv]),
+        "tool_calls": mean([len(inv.trace.tool_calls()) for inv in allinv]),
+        "tokens_in": mean([inv.trace.tokens_in for inv in allinv]),
+        "tokens_out": mean([inv.trace.tokens_out for inv in allinv]),
     }
 
 
@@ -178,9 +264,19 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--n", type=int, default=20, help="number of cross-validation datasets")
     ap.add_argument("--seed0", type=int, default=0)
+    ap.add_argument("--investigator", choices=["none", "heuristic", "llm"], default="none")
+    ap.add_argument("--model", help="model id for --investigator llm (default: INVESTIGATOR_MODEL)")
+    ap.add_argument("--trace-dir", help="write one JSONL trace per investigated case here")
     args = ap.parse_args(argv)
 
-    per = [run_dataset(args.seed0 + i) for i in range(args.n)]
+    factory = None
+    if args.investigator == "heuristic":
+        from agent.investigator import heuristic_client as factory
+    elif args.investigator == "llm":
+        from agent.investigator import MODEL, llm_client
+        factory = lambda: llm_client(args.model or MODEL)
+
+    per = [run_dataset(args.seed0 + i, client_factory=factory) for i in range(args.n)]
     print(f"\nEvaluation over {args.n} independent cross-validation scenarios "
           f"(seed0={args.seed0})\n" + "-" * 66)
     for key, label, want in METRICS:
@@ -191,6 +287,29 @@ def main(argv=None) -> int:
     print("  root-cause: singles exact · confound top-2 · artifact via suspect flag")
     print("  action: playbook match · cvr→verify · any suspect signature non-harmful")
     print("  blocked cut: weeks 9+10 — gate BLOCKs and executor REFUSES the bid cut\n")
+
+    if factory is not None:
+        cases = [c for d in per for c in d["cases"]]
+        r = investigator_report(cases)
+        print(f"Investigator ({args.investigator}) on {r['n']} measurement-suspect cases "
+              f"(+{r['ungraded']} flagged without a CVR/tracking event)\n" + "-" * 66)
+        print(f"  {'Resolution accuracy':44} {r['resolution_acc']*100:5.1f}%        want high")
+        for truth, (ok, n) in r["by_truth"].items():
+            print(f"    {truth:42} {ok:3d} / {n:<3d}")
+        print(f"  {'Confidently wrong':44} {r['confidently_wrong']*100:5.1f}%        want 0")
+        print(f"  {'Inconclusive (→ verify_measurement)':44} {r['inconclusive']*100:5.1f}%        safe")
+        print(f"  {'Trajectory: accepted used a side channel':44} {r['trajectory_ok']*100:5.1f}%        want 100")
+        print(f"  {'Evidence-guard interventions':44} {r['guard_interventions']:5d}")
+        print(f"  {'Fallbacks':44} {dict(r['fallbacks']) or '-'}")
+        print(f"  {'Per case: turns / tool calls':44} {r['turns']:5.1f} / {r['tool_calls']:.1f}")
+        print(f"  {'Per case: tokens in / out':44} {r['tokens_in']:7.0f} / {r['tokens_out']:.0f}")
+        print("-" * 66 + "\n")
+        if args.trace_dir:
+            out = Path(args.trace_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            for seed, (cid, w), truth, inv in cases:
+                inv.trace.to_jsonl(out / f"ds{seed:02d}_{cid}_{w[0]}_{truth}.jsonl")
+            print(f"traces → {out}/\n")
     return 0
 
 

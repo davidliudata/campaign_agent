@@ -54,6 +54,7 @@ class DiagnosisState(TypedDict, total=False):
     impact: Any            # week 8 projected impact of a candidate intervention (optional)
     policy: Any            # week 9 PolicyDecision — the guardrail verdict
     diagnosis: Any         # week 6 LLM narrative (only when a narrate node is wired in)
+    investigation: Any     # investigator verdict on a measurement-suspect case (when wired in)
 
 
 def _root_note(r: RootCause) -> str:
@@ -122,12 +123,18 @@ def route_after_root(state: DiagnosisState) -> str:
 
 # ── build & run ───────────────────────────────────────────────────────────────
 
-def build_graph(narrate_node: Optional[Callable[[DiagnosisState], dict]] = None):
+def build_graph(narrate_node: Optional[Callable[[DiagnosisState], dict]] = None,
+                investigate_node: Optional[Callable[[DiagnosisState], dict]] = None):
     """Compile the diagnosis graph.
 
     Deterministic by default (API-free). Pass `narrate_node` (week 6) to append an
     LLM diagnosis step after both terminal classifications — kept injectable so
     this module never imports the model SDK and the weeks 2–5 tests stay offline.
+
+    Pass `investigate_node` to put the investigator agent on the verify branch:
+    verify → investigate → act. Only measurement-suspect cases ever reach it, and
+    it can only change WHICH non-money action is recommended; the gate after `act`
+    still blocks any cut on the signature.
     """
     g = StateGraph(DiagnosisState)
     g.add_node("detect", detect_node)
@@ -147,7 +154,12 @@ def build_graph(narrate_node: Optional[Callable[[DiagnosisState], dict]] = None)
     g.add_conditional_edges("root_cause", route_after_root,
                             {"verify": "verify", "diagnosed": "diagnosed"})
     # both classifications flow through the deterministic action node, then the gate...
-    g.add_edge("verify", "act")
+    if investigate_node is not None:
+        g.add_node("investigate", investigate_node)
+        g.add_edge("verify", "investigate")
+        g.add_edge("investigate", "act")
+    else:
+        g.add_edge("verify", "act")
     g.add_edge("diagnosed", "act")
     g.add_edge("act", "policy")
     # ...then optionally the LLM narrative (week 6).
@@ -168,8 +180,10 @@ def diagnose(
     campaign_id: str,
     window: tuple[date, date],
     baseline: tuple[date, date],
+    investigate_node: Optional[Callable[[DiagnosisState], dict]] = None,
 ) -> DiagnosisState:
     """Run the diagnosis graph for one campaign and return the final state."""
-    return GRAPH.invoke({
+    graph = GRAPH if investigate_node is None else build_graph(investigate_node=investigate_node)
+    return graph.invoke({
         "obs": obs, "campaign_id": campaign_id, "window": window, "baseline": baseline,
     })

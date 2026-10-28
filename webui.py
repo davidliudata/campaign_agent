@@ -97,7 +97,7 @@ def parse_question(q: str) -> dict:
            f"2-week window. Baseline: a clean ~4-week window that does not overlap the "
            f"investigation window (prefer early March). Dates as YYYY-MM-DD.")
     resp = anthropic.Anthropic(max_retries=2).messages.parse(
-        model="claude-opus-4-8", max_tokens=600,
+        model="claude-opus-5-5", max_tokens=600,
         system=sys, messages=[{"role": "user", "content": q}], output_format=Query)
     Q = resp.parsed_output
     return result_json(Q.campaign_id, Q.window_start, Q.window_end,

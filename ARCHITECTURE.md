@@ -79,7 +79,7 @@ tree, the simulator) and reused, rather than re-derived per stage.
                                                    └───▶ narrate (LLM) ── explanation only, grounded on the evidence above
 ```
 
-The LLM (`agent/diagnosis.py`, `claude-opus-4-8`, structured output via
+The LLM (`agent/diagnosis.py`, `claude-opus-5-5`, structured output via
 `messages.parse`) is handed *only* the deterministic evidence — never truth columns —
 and writes the human-readable explanation. It cannot invent a root cause the
 deterministic stages did not find, and it cannot choose the action. This is where the
@@ -178,7 +178,161 @@ threshold until the number looked good.
 ## 9. Reproduce
 
 ```bash
-python -m pytest tests/ -q                 # 106 passed + 3 skipped (3 LLM tests need a key)
+python -m pytest tests/ -q                 # 172 passed + 3 skipped (3 LLM tests need a key)
 python demo.py                             # the trap through every stage, end to end
 python -m tools.evaluate --n 20            # the full graded harness
 ```
+
+---
+
+## 10. Build plan: investigator agent + harness
+
+### Why
+
+Through §9 the system is a *workflow*: every step is a fixed edge, and the model only
+narrates. That is the right call for anything that moves money, but it leaves the
+hardest question unanswered. On a `measurement_suspect` signature the pipeline stops
+at "verify measurement" and hands the ambiguity to a human, because the observed panel
+cannot tell a tracking outage from a real checkout regression.
+
+That ambiguity is exactly the job an agent is good at: open-ended, multi-step evidence
+gathering where no single source is decisive. No money moves while it investigates. So the
+agent goes **there** and nowhere else:
+
+```
+root_cause ─▶ (measurement_suspect?) ─ yes ─▶ verify ─▶ INVESTIGATE ─▶ act ─▶ policy
+                                                          │
+                     agent loop over read-only tools ─────┘
+                     verdict: tracking_outage | real_cvr_drop | inconclusive
+```
+
+The principle is unchanged, only refined. **The agent may now decide what is true;
+it still never chooses an action that moves money.** A verdict selects a row of the
+playbook (`no_action_fix_measurement` or `investigate_landing_page_and_checkout`), and
+`policy.py` still blocks any bid/budget cut on the signature.
+
+### Design
+
+**Side-channel evidence (`data/telemetry.py`).** The observed panel is identical under
+both hypotheses *by construction*, so the agent needs evidence outside the panel. In
+production these sources exist; here they are simulated from the truth with noise and
+decoys, so none of them is a free answer:
+
+| Source | Under a tracking outage | Under a real CVR drop | Why it is not decisive alone |
+|---|---|---|---|
+| tracking health: pixel tag-fire rate (web) / MMP postback success (app) | drops | flat | independent monitor glitches dip it with no real effect; noisy on small campaigns |
+| first-party orders (advertiser backend) | flat | drops | includes organic orders; Poisson noise; small campaigns are jumpy |
+| change log | sometimes a tag/SDK change | sometimes a site release | entries are probabilistic, and unrelated decoy changes are everywhere |
+
+Telemetry uses its own RNG stream, so every existing dataset and test is byte-identical.
+
+**Harness (`agent/harness/`).** The runtime that makes a model + tools into a bounded,
+auditable agent, independent of this domain:
+
+- *Tool registry*: name, description, JSON schema, handler, **permission tier**
+  (`read` / `write`), terminal flag. The agent only sees an explicit allowlist.
+- *Model client protocol*: `AnthropicClient` (Messages API tool use, prompt-cached
+  system + tools) and `ScriptedClient` (deterministic policies for offline tests and
+  the rule-based baseline). The loop never imports the SDK.
+- *Loop*: step, token, and wall-clock **budgets**; input validation against the schema;
+  tool errors returned to the model as `is_error` results, never raised; tool output
+  truncated to bound context growth.
+- *Hooks*: `pre_tool` / `post_tool`. **`policy.py` becomes a PreToolUse hook.** Any
+  `write`-tier tool call is routed through the same guardrails, so a bid cut on a
+  suspect signature is denied *inside* the agent loop as well as at the executor.
+- *Trace*: every model turn, tool call, hook decision, and stop reason with latency and
+  tokens, exportable as JSONL. This is what the trajectory evals read.
+
+**Investigator (`agent/investigator/`).** Tools: `get_pipeline_diagnosis`,
+`query_metrics`, `check_tracking_health`, `get_first_party_orders`, `get_change_log`,
+`compare_peers`, and the terminal `submit_verdict(hypothesis, confidence, evidence[])`.
+The harness **validates the verdict** before anything downstream sees it:
+
+- every piece of evidence must cite a tool call that actually ran and succeeded;
+- a decisive verdict requires that the agent consulted at least one side-channel
+  source (tracking health or first-party orders), which is a trajectory rule;
+- low confidence, a failed check, or an exhausted budget all **fall back to the
+  deterministic `verify_measurement`**, the pre-agent behaviour.
+
+A `HeuristicPolicy` drives the same tools through the same harness with fixed rules. It
+gives an offline baseline the LLM agent has to beat, and it runs the whole stack in CI
+without an API key.
+
+### Checklist
+
+- [x] 1. `data/telemetry.py`: tracking health, first-party orders, change log; separate RNG; decoys; tests
+- [x] 2. `agent/harness/`: registry + tiers, model clients, loop + budgets, hooks (policy gate as PreToolUse), trace; tests incl. a rogue model
+- [x] 3. `agent/investigator/`: tools, prompt, verdict validation + fallback, heuristic policy; tests
+- [x] 4. Graph wiring: `verify → investigate → act`; verdict-aware `recommend`; cut still blocked; `tools/ask.py --investigator`
+- [x] 5. Eval: `tools/evaluate.py --investigator none|heuristic|llm`, with resolution accuracy, confidently-wrong rate, inconclusive rate, trajectory compliance, citation validity, steps/tokens per case; safety metrics unchanged
+- [x] 6. Docs: results table + interview talking points here and in README; model IDs updated
+
+### Results (20 cross-validation scenarios, 40 measurement-suspect cases)
+
+```bash
+python -m tools.evaluate --n 20 --investigator heuristic
+python -m tools.evaluate --n 20 --investigator llm --trace-dir traces/    # needs ANTHROPIC_API_KEY
+```
+
+| Metric | No agent | Heuristic investigator | LLM investigator |
+|---|---|---|---|
+| Resolution accuracy (decisive and correct) | 0% (all verify) | 60% (tracking 13/20, real 11/20) | *run with a key* |
+| Confidently wrong | 0% | **0%** | |
+| Inconclusive → verify_measurement | 100% | 40% | |
+| Trajectory: accepted verdicts used a side channel | n/a | 100% | |
+| Harmful reco / auto-approved / blocked+refused cut on artifact | 0% / 0% / 100% | 0% / 0% / 100% | |
+| Turns / tool calls per case | n/a | 5 / 5 | |
+
+**First live case** (`claude-sonnet-5-5`, demo event `e004`, which is an outage that coincides
+with an organic demand dip; the heuristic returns inconclusive on it): the agent resolved it
+correctly as `tracking_outage` (0.75) in 4 turns, 7 tool calls, ~17.6k input / 2.3k output
+tokens, 23 s. Its reasoning was the magnitude comparison the design calls for. Tracking
+health fell to 0.38x and stayed down every day, matching reported conversions at 0.37x. Orders
+fell to only 0.89x, short of the ~23% drop a real CVR break would imply, so it treated the dip
+as demand noise and flagged it for a human. The full-suite LLM column is still to be run.
+
+The first attempt at that case surfaced a harness bug, the kind only a live model finds. The
+model reasoned to the right answer but could not see the `tool_use_id`s it had to cite.
+The evidence guard correctly rejected its guesses, and the case fell back to verify. Fix:
+every tool result now starts with its own id, and a guard denial lists the citable ids
+(both pinned by regression tests). The safety net worked as designed. The bug cost
+a resolution, not a wrong answer.
+
+The heuristic reads one signal at a time, so it punts exactly on the hard cases the
+telemetry plants on purpose: a monitor glitch inside a real drop, and an organic
+demand dip during an outage. Resolving those means comparing magnitudes across
+sources (under an outage, tracking health falls about as much as reported
+conversions; under a real drop, orders fall by roughly the ad share of the reported
+drop). That is the reasoning the LLM investigator has to supply to beat the
+baseline. The bar it must clear is higher resolution with confidently-wrong still at 0.
+
+### Interview talking points (agent edition)
+
+- **Where the agent goes.** Not everywhere. It goes to the one node where the work is
+  open-ended evidence gathering and nothing moves money while it works. The action is
+  still a lookup on the verdict.
+- **Harness, not prompt.** Budgets are stop reasons, model mistakes are error results
+  it can recover from, and policy is a PreToolUse hook. A prompt asking the model not
+  to cut bids is a request; a hook that denies the call is a guarantee. The
+  measurement-safety invariant is now enforced in three independent places.
+- **Validate the answer, not just the output format.** The evidence guard runs inside
+  the loop, so the model can fix a fabricated citation, and again after it. A
+  decisive verdict that never consulted a side channel is rejected by construction.
+- **A baseline the model must beat.** The same tools and harness are driven by four
+  threshold rules. If the LLM cannot out-resolve them at zero confidently-wrong, it is
+  not earning its tokens, and the eval says so.
+- **Asymmetric costs decide the default.** Inconclusive costs a human a few minutes; a
+  wrong "it's tracking" leaves a broken checkout running. So low confidence, a failed
+  check, or an exhausted budget all fall back to verify.
+- **Multi-agent is a measured decision, not a default.** The next step (hypothesis
+  fan-out) is in the plan behind one condition: beat the single agent on this eval by
+  more than its token cost.
+
+### Later (not in this build)
+
+- **Multi-agent fan-out**: an orchestrator sends one subagent per hypothesis (tracking,
+  checkout, competitor, creative fatigue, seasonality) in parallel with isolated
+  contexts, and a deterministic adjudicator scores the evidence. Adopt only if it beats
+  the single investigator on this eval by more than its token cost.
+- LLM-judge faithfulness on the narrative; expose the tools as an MCP server; extend
+  investigation to non-suspect anomalies (auction insights for CPC spikes).

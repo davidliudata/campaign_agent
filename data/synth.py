@@ -320,6 +320,9 @@ def main(argv: list[str] | None = None) -> int:
     df.to_csv(out / "campaigns_full.csv", index=False)          # with truth, for scoring
     df[FACT_COLUMNS].to_csv(out / "campaigns.csv", index=False)  # what the agent sees
     write_manifest(events, out / "manifest.json")
+    # side channels for the investigator agent (own RNG stream; fact table unchanged)
+    from .telemetry import generate_telemetry
+    generate_telemetry(df, events, default_portfolio(), seed=args.seed).save(out)
 
     print(f"{len(df):,} rows | {df.campaign_id.nunique()} campaigns | "
           f"{df.date.min():%Y-%m-%d} .. {df.date.max():%Y-%m-%d}")
