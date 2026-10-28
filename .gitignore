@@ -1,0 +1,6 @@
+generated/
+__pycache__/
+.pytest_cache/
+*.pyc
+eval_suite/
+.venv/

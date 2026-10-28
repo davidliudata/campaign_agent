@@ -1,0 +1,211 @@
+{
+  "main": {
+    "id": "d56b2efe19178731",
+    "type": "split",
+    "children": [
+      {
+        "id": "d81e8cae98aa2534",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "85dc65f4a43e2657",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "notes/verbal_bank.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "verbal_bank"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "b090b1dd67d4ef39",
+    "type": "split",
+    "children": [
+      {
+        "id": "c7e9f733ae5bc57a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "9126bebe0a66d483",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "018702ff00ad0169",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "6216980f761d0e0b",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "0a3fe712515a3fd6",
+    "type": "split",
+    "children": [
+      {
+        "id": "b0485e40d5bbcf04",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "79354ae4f85500d4",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "notes/verbal_bank.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks"
+            }
+          },
+          {
+            "id": "2ec33c71d77339a7",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "notes/verbal_bank.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links"
+            }
+          },
+          {
+            "id": "eb02ce974f53d74b",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "ab1f4d88eae67311",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "14ab3fc4c068d76e",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "notes/verbal_bank.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "85dc65f4a43e2657",
+  "lastOpenFiles": [
+    "notes/verbal_bank.md",
+    "Untitled",
+    "Untitled.md",
+    "notes/reading.md",
+    "notes/graph_flow.md",
+    "ARCHITECTURE.md",
+    "demo.py",
+    "tests/__pycache__/test_evaluate.cpython-311-pytest-9.1.1.pyc",
+    "tests/test_evaluate.py",
+    "agent/__pycache__/execution.cpython-311.pyc",
+    "tests/__pycache__/test_execution.cpython-311-pytest-9.1.1.pyc",
+    "tests/test_execution.py",
+    "agent/execution.py",
+    "agent/__pycache__/policy.cpython-311.pyc",
+    "tests/__pycache__/test_policy.cpython-311-pytest-9.1.1.pyc",
+    "notes/eval_and_system_design.md",
+    "notes/interview.md"
+  ]
+}

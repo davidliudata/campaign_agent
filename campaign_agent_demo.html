@@ -1,0 +1,97 @@
+<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Campaign Diagnosis Agent — demo</title>
+<style>
+ :root{--bg:#f6f7f9;--card:#fff;--line:#e6e8ee;--ink:#1c2330;--dim:#6b7385;--acc:#4f46e5;
+   --ok:#0f9d6b;--warn:#c2791b}
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--ink);
+   font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+ .wrap{max-width:760px;margin:0 auto;padding:40px 20px 80px}
+ header h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+ header p{color:var(--dim);margin:0 0 8px}
+ .note{font-size:12.5px;color:var(--dim);background:#eef2ff;border:1px solid #dfe4ff;
+   border-radius:10px;padding:9px 12px;margin:14px 0 6px}
+ .chips{margin:16px 0 0;display:flex;flex-wrap:wrap;gap:8px}
+ .chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:8px 13px;
+   font-size:13px;color:var(--ink);cursor:pointer}
+ .chip:hover{border-color:var(--acc);color:var(--acc)}
+ .chip.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+ #out{margin-top:22px}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;
+   box-shadow:0 1px 2px rgba(16,24,40,.04)}
+ .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+ .pill{font-size:12px;font-weight:700;padding:4px 11px;border-radius:999px;white-space:nowrap}
+ .p-anomaly{background:#eef2ff;color:var(--acc)} .p-clean{background:#e9f7f0;color:var(--ok)}
+ .p-needs_measurement_check{background:#fdf3e3;color:var(--warn)}
+ .meta{color:var(--dim);font-size:13px;margin:2px 0 0}
+ .interp{margin:12px 0 0;color:#475067}
+ h3{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);margin:20px 0 8px}
+ .bars .bar{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:14px}
+ .bars .name{width:96px;color:var(--ink)} .bars .track{flex:1;height:8px;background:#eef0f4;border-radius:6px;overflow:hidden}
+ .bars .fill{height:100%;background:var(--acc)} .bars .pct{width:44px;text-align:right;color:var(--dim);font-variant-numeric:tabular-nums}
+ .hl{font-size:16px;font-weight:650;margin:18px 0 4px;letter-spacing:-.01em}
+ .expl{color:#3c455a}
+ table.kpi{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+ table.kpi td,table.kpi th{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line)}
+ table.kpi th:first-child,table.kpi td:first-child{text-align:left;color:var(--dim);font-weight:500}
+ .up{color:#c23b3b} .down{color:var(--ok)}
+ .action{margin-top:20px;padding:14px 16px;border-radius:12px;background:#f3f5fb;border:1px solid var(--line)}
+ .action.warn{background:#fdf3e3;border-color:#f0d9ac}
+ .action .lab{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+ .action .rec{font-size:16px;font-weight:650;margin-top:2px}
+ .action .why{color:#5a6478;font-size:13.5px;margin-top:6px}
+ .action .gate{font-size:13px;margin-top:8px;color:#5a6478}
+ .g-approve{color:var(--ok)} .g-require_approval{color:var(--warn)} .g-block{color:#c23b3b}
+ .grail{color:var(--dim);font-size:12px}
+ .tag{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:1px 7px;margin-left:8px}
+</style></head><body><div class=wrap>
+<header><h1>Campaign Diagnosis Agent</h1>
+<p>Detect a campaign anomaly, attribute the root cause, and propose a safe action.</p></header>
+<div class=note>Static demo — every result below is real output from the Python pipeline
+(detect → decompose → root-cause → action, plus an LLM-written explanation), baked in
+ahead of time. No server or API key needed to view. The ground-truth cause is shown as a
+grey tag so you can check the verdict.</div>
+<div class=chips id=chips></div>
+<div id=out></div>
+</div>
+<script>
+const CASES=[{"campaign": "c_apparel_us", "window": ["2026-04-06", "2026-04-19"], "status": "anomaly", "interpretation": "Why did Apparel US get more expensive per conversion in April?", "root": {"driver": "cpc", "bucket": "efficiency", "ranked": [["cpc", 100.0]], "measurement_suspect": false}, "kpis": {"cpa": {"before": 13.48, "after": 20.14, "pct": 49.4}, "roas": {"before": 5.76, "after": 3.93, "pct": -31.8}}, "diagnosis": {"headline": "CPA and ROAS worsened because cost-per-click jumped sharply, not because of conversion issues", "explanation": "The anomaly on c_apparel_us is driven entirely by rising CPC (100% of the driver, confidence 1.00). CPA climbed from 13.49 to 20.14, with CPC explaining +97% of that move, while CVR was essentially flat (+3%). The same CPC increase (+101% to +111%) pushed ROAS down from 5.76 to 3.93 and drove spend up from 4270.82 to 6067.50, even as CTR fell -16%. This is an efficiency problem rooted in what we pay per click, not a volume or tracking issue."}, "action": {"recommendation": "review_bids_and_competition", "requires_verification": false}, "policy": {"decision": "approve", "guardrails": []}, "question": "Why did Apparel US get more expensive per conversion in April?", "label": "cpc_spike"}, {"campaign": "c_home_us", "window": ["2026-05-11", "2026-05-18"], "status": "needs_measurement_check", "interpretation": "Home US conversions dropped in mid-May \u2014 what broke?", "root": {"driver": "cvr", "bucket": "efficiency", "ranked": [["cvr", 100.0]], "measurement_suspect": true}, "kpis": {"cpa": {"before": 21.24, "after": 37.58, "pct": 76.9}, "roas": {"before": 6.21, "after": 3.63, "pct": -41.6}}, "diagnosis": {"headline": "Conversions and ROAS dropped on c_home_us, but the CVR collapse looks like a tracking artifact \u2014 verify conversion pipeline before acting.", "explanation": "The deterministic driver is CVR (100% of the move, confidence 1.00), which pushed conversions from 72.393 to 38.875 and drove CPA up from 21.245 to 37.578 and ROAS down from 6.213 to 3.626. However, the measurement_suspect flag is set, so this CVR drop could be a conversion-tracking artifact rather than a real efficiency loss. The conversion pipeline must be verified before any bid or budget action \u2014 do not cut bids or pause on this signature."}, "action": {"recommendation": "verify_measurement", "requires_verification": true}, "policy": {"decision": "require_approval", "guardrails": ["verification_hold"]}, "question": "Home US conversions dropped in mid-May \u2014 what broke?", "label": "cvr_drop"}, {"campaign": "c_apparel_eu", "window": ["2026-06-01", "2026-06-14"], "status": "anomaly", "interpretation": "Apparel EU ROAS slipped in early June \u2014 why?", "root": {"driver": "aov", "bucket": "efficiency", "ranked": [["aov", 100.0]], "measurement_suspect": false}, "kpis": {"roas": {"before": 5.34, "after": 3.96, "pct": -25.7}}, "diagnosis": {"headline": "ROAS dropped from 5.34 to 3.96 driven entirely by a lower average order value.", "explanation": "The ROAS decline is fully attributable to a drop in average order value (AOV), which accounts for 100% of the movement. CPC (-7%) and CVR (+1%) both moved slightly favorably and did not contribute to the decline. This is a revenue-per-order efficiency issue, not a traffic or conversion-volume problem."}, "action": {"recommendation": "investigate_product_mix", "requires_verification": false}, "policy": {"decision": "approve", "guardrails": []}, "question": "Apparel EU ROAS slipped in early June \u2014 why?", "label": "aov_drop"}, {"campaign": "c_electro_us", "window": ["2026-04-13", "2026-05-03"], "status": "anomaly", "interpretation": "Electronics US is losing traffic through late April \u2014 is it a bidding problem?", "root": {"driver": "ctr", "bucket": "volume", "ranked": [["ctr", 100.0]], "measurement_suspect": false}, "kpis": {}, "diagnosis": {"headline": "CTR-driven volume shift is the primary driver of the anomaly on c_electro_us", "explanation": "The deterministic pipeline attributes 100% of this anomaly to a change in click-through rate (a volume event), with full confidence. CTR moved clicks, spend, and conversions together \u2014 a volume signature, not an efficiency problem. Since billing is CPC-based, cost per acquisition is unaffected by the CTR/volume move itself, so this should be read as a demand/volume shift rather than an efficiency degradation."}, "action": {"recommendation": "refresh_creative", "requires_verification": false}, "policy": {"decision": "approve", "guardrails": []}, "question": "Electronics US is losing traffic through late April \u2014 is it a bidding problem?", "label": "ctr_drop"}, {"campaign": "c_beauty_us", "window": ["2026-05-25", "2026-05-29"], "status": "needs_measurement_check", "interpretation": "Beauty US CPA spiked ~200% in late May \u2014 should I pause the campaign?", "root": {"driver": "cvr", "bucket": "efficiency", "ranked": [["cvr", 90.2], ["impressions", 9.8]], "measurement_suspect": true}, "kpis": {"cpa": {"before": 7.62, "after": 23.55, "pct": 209.1}, "roas": {"before": 5.66, "after": 1.8, "pct": -68.2}}, "diagnosis": {"headline": "Sharp conversion drop on c_beauty_us looks like a tracking issue \u2014 verify before acting", "explanation": "Conversions fell from 193 to 72 with CPA rising from 7.62 to 23.55 and ROAS collapsing from 5.66 to 1.80, and the deterministic pipeline attributes ~90% of this to a CVR decline. However, the measurement_suspect flag is set, so the drop in reported conversions could be a tracking artifact rather than a real efficiency loss. Clicks and impressions actually rose slightly, so this is not a volume problem. The conversion pipeline must be verified before any bid or budget change."}, "action": {"recommendation": "verify_measurement", "requires_verification": true}, "policy": {"decision": "require_approval", "guardrails": ["verification_hold"]}, "question": "Beauty US CPA spiked ~200% in late May \u2014 should I pause the campaign?", "label": "tracking_outage"}, {"campaign": "c_sports_us", "window": ["2026-06-08", "2026-06-18"], "status": "needs_measurement_check", "interpretation": "Sports US lost traffic in mid-June \u2014 what happened?", "root": {"driver": "impressions", "bucket": "volume", "ranked": [["impressions", 72.2], ["cvr", 27.8]], "measurement_suspect": true}, "kpis": {}, "diagnosis": {"headline": "c_sports_us conversion drop is a volume (impressions) event, but tracking must be verified first", "explanation": "Conversions fell from 42.9 to 18.5, driven primarily by an impressions/volume decline (72% of the move), with cvr a secondary contributor (28%). The spend and clicks drops are almost entirely impressions-driven (99% and 96% respectively), consistent with fewer impressions flowing through the funnel rather than an efficiency problem. However, the measurement_suspect flag is set, so the reported conversion figures could be a tracking artifact."}, "action": {"recommendation": "verify_measurement", "requires_verification": true}, "policy": {"decision": "require_approval", "guardrails": ["verification_hold"]}, "question": "Sports US lost traffic in mid-June \u2014 what happened?", "label": "traffic_drop"}, {"campaign": "c_sports_us", "window": ["2026-06-12", "2026-06-18"], "status": "needs_measurement_check", "interpretation": "Sports US conversions collapsed in mid-June \u2014 what happened?", "root": {"driver": "impressions", "bucket": "volume", "ranked": [["impressions", 56.6], ["cvr", 43.4]], "measurement_suspect": true}, "kpis": {"cpa": {"before": 20.75, "after": 33.41, "pct": 61.0}, "roas": {"before": 4.62, "after": 2.84, "pct": -38.5}}, "diagnosis": {"headline": "Conversion drop is led by an impressions volume decline, but tracking must be verified first", "explanation": "The conversion decline from 42.9 to 14.4 is driven primarily by impressions (57%, volume bucket) with cvr contributing 43%, and clicks/spend fell almost entirely on lower impressions \u2014 a volume event, not an efficiency failure. Because measurement is flagged as suspect, the reported conversions could be a tracking artifact, so the conversion pipeline must be verified before any bid or budget action. Do not cut bids or pause on this signature until tracking is confirmed."}, "action": {"recommendation": "verify_measurement", "requires_verification": true}, "policy": {"decision": "require_approval", "guardrails": ["verification_hold"]}, "question": "Sports US conversions collapsed in mid-June \u2014 what happened?", "label": "cvr_drop"}, {"campaign": "c_grocery_us", "window": ["2026-05-04", "2026-05-17"], "status": "clean", "interpretation": "Is Grocery US healthy in early May?", "root": null, "kpis": {}, "diagnosis": null, "action": {"recommendation": "no_action", "requires_verification": false}, "policy": {"decision": "approve", "guardrails": []}, "question": "Is Grocery US healthy in early May?", "label": "clean"}, {"campaign": "c_toys_us", "window": ["2026-05-04", "2026-05-17"], "status": "clean", "interpretation": "Any problem with Toys US in early May?", "root": null, "kpis": {}, "diagnosis": null, "action": {"recommendation": "no_action", "requires_verification": false}, "policy": {"decision": "approve", "guardrails": []}, "question": "Any problem with Toys US in early May?", "label": "clean"}];
+const $=id=>document.getElementById(id);
+CASES.forEach((c,i)=>{const el=document.createElement('div');el.className='chip';
+  el.innerHTML=c.question+`<span class=tag>truth: ${c.label}</span>`;
+  el.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+    el.classList.add('on'); render(c);};
+  $('chips').appendChild(el);});
+
+function render(d){
+ const st=d.status||'error';
+ let h=`<div class=card><div class=top><div><div class=meta>${d.campaign||''} · ${(d.window||[]).join(' → ')}</div></div>`
+      +`<span class="pill p-${st}">${st.replace(/_/g,' ').toUpperCase()}</span></div>`;
+ if(d.interpretation) h+=`<div class=interp>“${d.interpretation}”</div>`;
+ if(d.root){h+=`<h3>Root cause</h3><div class=bars>`;
+   d.root.ranked.forEach(([n,p])=>{h+=`<div class=bar><span class=name>${n}</span>`
+     +`<span class=track><span class=fill style="width:${Math.min(100,p)}%"></span></span>`
+     +`<span class=pct>${Math.round(p)}%</span></div>`;});
+   h+=`</div><div class=meta style="margin-top:6px">bucket: ${d.root.bucket}`
+     +(d.root.measurement_suspect?` · ⚠ measurement-suspect`:``)+`</div>`;
+ } else if(st!=='error'){ h+=`<p>No anomaly — nothing moved beyond sampling noise.</p>`; }
+ if(d.kpis&&Object.keys(d.kpis).length){h+=`<h3>Key metrics</h3><table class=kpi>`
+   +`<tr><th>metric</th><th>baseline</th><th>window</th><th>change</th></tr>`;
+   for(const[k,v]of Object.entries(d.kpis)){const cls=v.pct>=0?'up':'down';
+     h+=`<tr><td>${k.toUpperCase()}</td><td>${v.before}</td><td>${v.after}</td>`
+       +`<td class=${cls}>${v.pct>=0?'+':''}${v.pct}%</td></tr>`;}
+   h+=`</table>`;}
+ if(d.diagnosis){h+=`<div class=hl>“${d.diagnosis.headline}”</div><p class=expl>${d.diagnosis.explanation}</p>`;}
+ if(d.action){const w=d.action.requires_verification;
+   const p=d.policy, pd=p?p.decision:null;
+   h+=`<div class="action ${w?'warn':''}"><div class=lab>Recommended action</div>`
+     +`<div class=rec>${d.action.recommendation}</div>`
+     +(p?`<div class=gate>gate: <b class="g-${pd}">${pd.replace(/_/g,' ').toUpperCase()}</b>`
+         +(p.guardrails.length?` <span class=grail>${p.guardrails.join(' · ')}</span>`:``)+`</div>`:``)
+     +(w?`<div class=why>⚠ Hold — the conversion drop could be a tracking artifact; verify measurement before acting.</div>`:``)
+     +`</div>`;}
+ $('out').innerHTML=h+`</div>`;
+}
+document.querySelector('.chip').click();   // open the first case
+</script></body></html>
